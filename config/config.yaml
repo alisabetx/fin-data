@@ -6,5 +6,107 @@ apis:
     max_retries: 3
     retry_backoff_seconds: 5
     timeout_seconds: 10
-    # target_url: https://httpbin.org/post
+    enabled: true
+
+  - name: fund_type
+    url: https://fipiran.ir/services/fund/fundtype
+    method: GET
+    interval_seconds: 3600
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    enabled: true
+
+  - name: fund_getfund
+    url: https://fipiran.ir/services/fund/getfund
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+    enabled: true
+
+  - name: instrument_getinstrument
+    url: https://fipiran.ir/services/instrument/getinstrument
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      insCode: "24651394045981418"
+    enabled: true
+
+  - name: chart_portfolio
+    url: https://fipiran.ir/services/chart/portfoliochart
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+      showAll: "true"
+    enabled: true
+
+  - name: chart_possession
+    url: https://fipiran.ir/services/chart/possessionchart
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+      showAll: "true"
+    enabled: true
+
+  - name: chart_getfund
+    url: https://fipiran.ir/services/chart/getfundchart
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+      showAll: "true"
+    enabled: true
+
+  - name: chart_getfundnetasset
+    url: https://fipiran.ir/services/chart/getfundnetassetchart
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+      showAll: "true"
+    enabled: true
+
+  - name: chart_alphabetachart
+    url: https://fipiran.ir/services/chart/alphabetachart
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+      showAll: "true"
+    enabled: true
+
+  - name: chart_fundefficiency
+    url: https://fipiran.ir/services/chart/fundefficiencychart
+    method: GET
+    interval_seconds: 1800
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    query_params:
+      regno: "11922"
+      showAll: "true"
     enabled: true

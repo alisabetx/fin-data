@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
@@ -79,7 +79,7 @@ class JobManager:
         state = self._state[api_config.name]
 
         while True:
-            state.last_run = datetime.utcnow()
+            state.last_run = datetime.now(timezone.utc)
             state.run_count += 1
 
             try:
@@ -100,7 +100,7 @@ class JobManager:
                 if api_config.target_url:
                     await self._send_to_target(client, api_config, payload)
 
-                state.last_success = datetime.utcnow()
+                state.last_success = datetime.now(timezone.utc)
                 state.last_error = None
                 logger.info("Job '%s' completed successfully", api_config.name)
             except Exception as exc:  # noqa: BLE001
@@ -113,16 +113,27 @@ class JobManager:
         self,
         client: httpx.AsyncClient,
         api_config: ApiConfig,
+        extra_params: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """
         صدا زدن API با سیاست retry مخصوص خودش.
         """
         last_error: Exception | None = None
+
+        # params = query_params از config + هر چیزی که در لحظه پاس داده شود
+        params: Dict[str, Any] | None = None
+        if api_config.query_params:
+            params = dict(api_config.query_params)
+        if extra_params:
+            params = params or {}
+            params.update(extra_params)
+
         for attempt in range(1, api_config.max_retries + 1):
             try:
                 response = await client.request(
                     method=api_config.method,
                     url=api_config.url,
+                    params=params,
                     timeout=api_config.timeout_seconds,
                 )
                 response.raise_for_status()

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import logging
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import load_config
@@ -17,51 +18,56 @@ from .process import PROCESSORS
 logger = logging.getLogger("findata")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    config = load_config()
+    http_client = httpx.AsyncClient()
+    job_manager = JobManager(app, config)
+
+    app.state.config = config  # type: ignore[attr-defined]
+    app.state.http_client = http_client  # type: ignore[attr-defined]
+    app.state.job_manager = job_manager  # type: ignore[attr-defined]
+
+    job_manager.start()
+    logger.info("FinData startup completed")
+
+    try:
+        yield
+    finally:
+        await job_manager.stop()
+        await http_client.aclose()
+        logger.info("FinData shutdown completed")
+
+
 def create_app() -> FastAPI:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
 
-    app = FastAPI(
+    fastapi_app = FastAPI(
         title="FinData",
         version="1.0.0",
         description="Simple and extensible financial data collector.",
+        lifespan=lifespan,
     )
 
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        config = load_config()
-        app.state.config = config
-        app.state.http_client = httpx.AsyncClient()
-        app.state.job_manager = JobManager(app, config)
-        app.state.job_manager.start()
-        logger.info("FinData startup completed")
-
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
-        job_manager: JobManager = app.state.job_manager
-        await job_manager.stop()
-        client: httpx.AsyncClient = app.state.http_client
-        await client.aclose()
-        logger.info("FinData shutdown completed")
-
-    @app.get("/")
-    def read_root():
+    @fastapi_app.get("/")
+    async def read_root() -> Dict[str, str]:
         return {"message": "Service is up", "status": "ok"}
 
-    @app.get("/health", summary="Health check")
+    @fastapi_app.get("/health", summary="Health check")
     async def health() -> Dict[str, str]:
         return {"status": "ok"}
 
-    @app.get(
+    @fastapi_app.get(
         "/jobs",
         response_model=List[ApiJobStatus],
         summary="List background API jobs and their status",
     )
-    async def list_jobs() -> List[ApiJobStatus]:
-        job_manager: JobManager = app.state.job_manager
-        config = app.state.config
+    async def list_jobs(request: Request) -> List[ApiJobStatus]:
+        job_manager: JobManager = request.app.state.job_manager  # type: ignore[attr-defined]
+        config = request.app.state.config  # type: ignore[attr-defined]
         statuses: List[ApiJobStatus] = []
 
         for api_cfg in config.apis:
@@ -82,13 +88,15 @@ def create_app() -> FastAPI:
             )
         return statuses
 
-    @app.post(
+    @fastapi_app.post(
         "/jobs/{job_name}/run-once",
         summary="Trigger a single run of a job immediately",
     )
-    async def run_job_once(job_name: str) -> JSONResponse:
-        job_manager: JobManager = app.state.job_manager
-        config = app.state.config
+    async def run_job_once(job_name: str, request: Request) -> JSONResponse:
+        job_manager: JobManager = request.app.state.job_manager  # type: ignore[attr-defined]
+        config = request.app.state.config  # type: ignore[attr-defined]
+        http_client: httpx.AsyncClient = request.app.state.http_client  # type: ignore[attr-defined]
+
         api_cfg = next((a for a in config.apis if a.name == job_name), None)
         if api_cfg is None:
             return JSONResponse(
@@ -96,37 +104,30 @@ def create_app() -> FastAPI:
                 content={"error": f"Job '{job_name}' not found"},
             )
 
-        client: httpx.AsyncClient = app.state.http_client
+        # تمام query string ها را برای این job می‌گیریم (مثل regno, insCode, showAll)
+        extra_params: Dict[str, Any] = dict(request.query_params)
+        if extra_params:
+            logger.info(
+                "Manual /run-once for job '%s' with query params: %s",
+                job_name,
+                extra_params,
+            )
 
-        last_error: Exception | None = None
-        data: Any | None = None
-        for attempt in range(1, api_cfg.max_retries + 1):
-            try:
-                response = await client.request(
-                    method=api_cfg.method,
-                    url=api_cfg.url,
-                    timeout=api_cfg.timeout_seconds,
-                )
-                response.raise_for_status()
-                data = response.json()
-                break
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                logger.warning(
-                    "Manual run of API '%s' failed on attempt %s/%s: %s",
-                    api_cfg.name,
-                    attempt,
-                    api_cfg.max_retries,
-                    exc,
-                )
-                if attempt < api_cfg.max_retries:
-                    await asyncio.sleep(api_cfg.retry_backoff_seconds)
-
-        if data is None:
-            assert last_error is not None
+        try:
+            data = await job_manager._fetch_with_retry(  # type: ignore[attr-defined]
+                http_client,
+                api_cfg,
+                extra_params=extra_params or None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Manual run of API '%s' failed: %s",
+                api_cfg.name,
+                exc,
+            )
             return JSONResponse(
                 status_code=502,
-                content={"error": str(last_error)},
+                content={"error": str(exc)},
             )
 
         payload: Any = data
@@ -134,7 +135,6 @@ def create_app() -> FastAPI:
         if processor:
             payload = processor(data)
 
-        # ✔ در حالت تست: payload اجرای دستی را در لاگ نمایش بده
         logger.info(
             "Payload for job '%s' (manual /run-once): %s",
             job_name,
@@ -143,7 +143,7 @@ def create_app() -> FastAPI:
 
         if api_cfg.target_url:
             try:
-                response = await client.post(
+                response = await http_client.post(
                     api_cfg.target_url,
                     json=payload,
                     timeout=api_cfg.timeout_seconds,
@@ -155,12 +155,9 @@ def create_app() -> FastAPI:
                     content={"error": f"Error sending to target: {exc}"},
                 )
 
-        # Update job state for visibility
         state = job_manager.state.get(api_cfg.name)
         if state is not None:
-            from datetime import datetime
-
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             state.last_run = now
             state.last_success = now
             state.last_error = None
@@ -171,7 +168,47 @@ def create_app() -> FastAPI:
             content={"status": "ok"},
         )
 
-    return app
+    @fastapi_app.post(
+        "/jobs/run-all-once",
+        summary="Run all configured jobs once and report HTTP 200 status",
+    )
+    async def run_all_jobs_once(request: Request) -> JSONResponse:
+        job_manager: JobManager = request.app.state.job_manager  # type: ignore[attr-defined]
+        config = request.app.state.config  # type: ignore[attr-defined]
+        http_client: httpx.AsyncClient = request.app.state.http_client  # type: ignore[attr-defined]
+
+        results: List[Dict[str, Any]] = []
+
+        for api_cfg in config.apis:
+            if not api_cfg.enabled:
+                continue
+
+            try:
+                _ = await job_manager._fetch_with_retry(  # type: ignore[attr-defined]
+                    http_client,
+                    api_cfg,
+                )
+                status = "ok"
+                error_message: str | None = None
+            except Exception as exc:  # noqa: BLE001
+                status = "error"
+                error_message = str(exc)
+
+            results.append(
+                {
+                    "name": api_cfg.name,
+                    "url": api_cfg.url,
+                    "status": status,
+                    "error": error_message,
+                },
+            )
+
+        return JSONResponse(
+            status_code=200,
+            content={"results": results},
+        )
+
+    return fastapi_app
 
 
 app = create_app()

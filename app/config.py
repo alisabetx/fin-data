@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import yaml
 
@@ -22,6 +22,7 @@ class ApiConfig:
     timeout_seconds: int
     target_url: Optional[str]
     enabled: bool = True
+    query_params: Optional[Dict[str, str]] = None  # ← پارامترهای داینامیک
 
 
 @dataclass
@@ -54,6 +55,16 @@ def load_config(path: Path = CONFIG_PATH) -> AppConfig:
         if not url:
             raise ValueError(f"API '{name}' must have a 'url' field.")
 
+        raw_query_params = entry.get("query_params")
+        query_params: Optional[Dict[str, str]] = None
+        if raw_query_params is not None:
+            if not isinstance(raw_query_params, dict):
+                raise ValueError(
+                    f"API '{name}' has invalid 'query_params' (must be an object/dict).",
+                )
+
+            query_params = {str(k): str(v) for k, v in raw_query_params.items()}
+
         api = ApiConfig(
             name=str(name),
             url=str(url),
@@ -64,6 +75,7 @@ def load_config(path: Path = CONFIG_PATH) -> AppConfig:
             timeout_seconds=int(entry.get("timeout_seconds", 10)),
             target_url=str(entry["target_url"]) if entry.get("target_url") else None,
             enabled=bool(entry.get("enabled", True)),
+            query_params=query_params,
         )
 
         apis.append(api)
