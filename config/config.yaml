@@ -1,0 +1,10 @@
+apis:
+  - name: fund_compare
+    url: https://fipiran.ir/services/fund/fundcompare
+    method: GET
+    interval_seconds: 600
+    max_retries: 3
+    retry_backoff_seconds: 5
+    timeout_seconds: 10
+    # target_url: https://httpbin.org/post
+    enabled: true
